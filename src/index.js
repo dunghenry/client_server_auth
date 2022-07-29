@@ -6,6 +6,7 @@ const morgan = require('morgan');
 const port = process.env.PORT || 4000;
 const connectDB = require('./config/connectDB');
 const routes = require('./routes');
+const viewEngine = require('./config/viewEngine');
 dotenv.config();
 const app = express();
 app.use(express.json({extended: true, limit: '50mb'}));
@@ -13,8 +14,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb'}));
 app.use(cors());
 app.use(helmet());
 app.use(morgan("dev"));
-(async() =>{
-    await connectDB();
-})();
+viewEngine(app);
+connectDB();
 routes(app);
 app.listen(port, () => console.log(`Server listening on port http://localhost:${port}`));
