@@ -1,8 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
+const { verifyToken } = require('../middleware/verifyToken');
 router.post('/register', authController.register);
 router.post('/login', authController.login);
 router.get('/verify/:userId/:uniqueString', authController.verifyEmail);
 router.get('/verify', authController.getVerificationPage);
+router.post('/logout', verifyToken, authController.logout);
+router.post('/refreshToken', authController.requestRefreshToken);
 module.exports = router;

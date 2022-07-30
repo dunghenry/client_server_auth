@@ -6,6 +6,8 @@ const { userValidation, userLoginValidation } = require('../helpers/validateUser
 const logEvents = require('../helpers/logEvents');
 const bcrypt = require('bcrypt');
 const dotenv = require('dotenv');
+const UserToken = require('../models/UserToken');
+const jwt = require('jsonwebtoken');
 const { generateAccessToken, generateRefreshToken } = require('../helpers/generateToken');
 dotenv.config();
 const transport = nodemailer.createTransport({
@@ -92,7 +94,7 @@ class authController {
             }
         }
         else {
-            return res.status(400).json("Verification emai failed!");
+            return res.status(400).json("Verification emai sent failed!");
         }
     }
     static async verifyEmail(req, res) {
@@ -183,11 +185,94 @@ class authController {
 
             if (user && isValidPassword) {
                 const { password, ...others } = user._doc;
+                const accessToken = generateAccessToken(user._doc);
+                const refreshToken = generateRefreshToken(user._doc);
+                const userToken = await UserToken.findOne({ userId: user._id });
+                if (!userToken) {
+                    const newUserToken = new UserToken({
+                        userId: user._doc._id,
+                        refreshToken: refreshToken,
+                    })
+                    await newUserToken.save();
+                }
+                else {
+                    await UserToken.updateOne({ userId: user._id }, { refreshToken: refreshToken });
+                }
                 if (!user._doc.verified) {
                     return res.status(400).json("Email hasn't been verified yet.Check your inbox!");
                 }
-                return res.status(200).json(others);
+                res.cookie('refreshToken', refreshToken, {
+                    httpOnly: true,
+                    secure: false,
+                    path: '/',
+                    sameSite: 'strict',
+                    maxAge: 365 * 24 * 60 * 60 * 60
+                })
+                return res.status(200).json({ ...others, accessToken });
             }
+        } catch (error) {
+            console.log(error);
+            await logEvents(error.message, module.filename);
+            return res.status(500).json(error);
+        }
+    }
+    static async logout(req, res) {
+        try {
+            const data = await UserToken.deleteOne({ userId: req.user.userId });
+            res.clearCookie('refreshToken');
+            if (data.deletedCount === 1) {
+                return res.status(200).json('Logged out successfully!');
+            }
+            else {
+                return res.status(403).json('Logged out failed!');
+            }
+        } catch (error) {
+            console.log(error);
+            await logEvents(error.message, module.filename);
+            return res.status(500).json(error);
+        }
+    }
+    static async requestRefreshToken(req, res) {
+        try {
+            const refreshToken = req.cookies.refreshToken;
+            if (!refreshToken) {
+                return res.status(401).json("You're not authenticated");
+            }
+            jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, async (error, data) => {
+                if (error?.name === 'TokenExpiredError') {
+                    return res.status(403).json('Toke is expired!');
+                } else if (error) {
+                    return res.status(403).json('Toke is not valid!');
+                }
+                const user = {
+                    _id: data.userId
+                }
+                const newAccessToken = generateAccessToken(user);
+                const newRefreshToken = generateRefreshToken(user);
+
+                res.cookie('refreshToken', newRefreshToken, {
+                    httpOnly: true,
+                    secure: false,
+                    path: '/',
+                    sameSite: 'strict',
+                    maxAge: 365 * 24 * 60 * 60 * 60
+                });
+                let message = '';
+                const userToken = await UserToken.findOne({ userId: user._id });
+                if (userToken) {
+                    const data = await UserToken.updateOne({ userId: user._id }, { refreshToken: newRefreshToken });
+                    if (data.modifiedCount === 0) {
+                        message = "Refresh token failed!";
+                    }
+                    else {
+                        message = "Refresh token successfully!";
+                    }
+                }
+                else {
+                    return res.status(404).json("User not found!");
+                }
+                return res.status(201).json({ message, accessToken: newAccessToken, refreshToken: newRefreshToken });
+            })
         } catch (error) {
             console.log(error);
             await logEvents(error.message, module.filename);
